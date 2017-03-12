@@ -1,0 +1,669 @@
+diff --git a/lib/search.h b/lib/search.h
+index 6e79609bc..841df3296 100644
+--- a/lib/search.h
++++ b/lib/search.h
+@@ -164,6 +164,9 @@ gchar **mc_search_get_types_strings_array (size_t * num);
+ gboolean mc_search (const gchar * pattern, const gchar * pattern_charset, const gchar * str,
+                     mc_search_type_t type);
+ 
++gboolean mc_search_case (const gchar * pattern, const gchar * pattern_charset, const gchar * str,
++                         mc_search_type_t type, gboolean case_insensitive);
++
+ int mc_search_getstart_result_by_num (mc_search_t *, int);
+ int mc_search_getend_result_by_num (mc_search_t *, int);
+ 
+diff --git a/lib/search/search.c b/lib/search/search.c
+index e9e160a09..36cdd2746 100644
+--- a/lib/search/search.c
++++ b/lib/search/search.c
+@@ -418,7 +418,7 @@ mc_search_is_fixed_search_str (mc_search_t * lc_mc_search)
+ }
+ 
+ /* --------------------------------------------------------------------------------------------- */
+-/* Search specified pattern in specified string.
++/* Search specified pattern case sensitive in specified string.
+  *
+  * @param pattern string to search
+  * @param pattern_charset charset of #pattern. If NULL then cp_display will be used
+@@ -427,11 +427,28 @@ mc_search_is_fixed_search_str (mc_search_t * lc_mc_search)
+  *
+  * @return TRUE if found is successful, FALSE otherwise.
+  */
+-
+ gboolean
+ mc_search (const gchar * pattern, const gchar * pattern_charset, const gchar * str,
+            mc_search_type_t type)
+ {
++    return mc_search_case (pattern, pattern_charset, str, type, FALSE);
++}
++
++/* --------------------------------------------------------------------------------------------- */
++/* Search specified pattern in specified string.
++ *
++ * @param pattern string to search
++ * @param pattern_charset charset of #pattern. If NULL then cp_display will be used
++ * @param str string where search #pattern
++ * @param search type (normal, regex, hex or glob)
++ * @param search case insensitive
++ *
++ * @return TRUE if found is successful, FALSE otherwise.
++ */
++gboolean
++mc_search_case (const gchar * pattern, const gchar * pattern_charset, const gchar * str,
++                mc_search_type_t type, gboolean case_insensitive)
++{
+     gboolean ret;
+     mc_search_t *search;
+ 
+@@ -443,7 +460,7 @@ mc_search (const gchar * pattern, const gchar * pattern_charset, const gchar * s
+         return FALSE;
+ 
+     search->search_type = type;
+-    search->is_case_sensitive = TRUE;
++    search->is_case_sensitive = !case_insensitive;
+ 
+     if (type == MC_SEARCH_T_GLOB)
+         search->is_entire_line = TRUE;
+diff --git a/src/filemanager/boxes.c b/src/filemanager/boxes.c
+index 4ad7958f4..d98e22966 100644
+--- a/src/filemanager/boxes.c
++++ b/src/filemanager/boxes.c
+@@ -547,8 +547,8 @@ configure_box (void)
+                     QUICK_CHECKBOX (N_("Cd follows lin&ks"), &mc_global.vfs.cd_symlinks, NULL),
+                     QUICK_CHECKBOX (N_("Sa&fe delete"), &safe_delete, NULL),
+                     QUICK_CHECKBOX (N_("A&uto save setup"), &auto_save_setup, NULL),
+-                    QUICK_SEPARATOR (FALSE),
+-                    QUICK_SEPARATOR (FALSE),
++                    QUICK_CHECKBOX (N_("Filter directories"), &filter_dirs, NULL),
++                    QUICK_CHECKBOX (N_("Filter .. directory"), &filter_dotdot_dir, NULL),
+                     QUICK_SEPARATOR (FALSE),
+                 QUICK_STOP_GROUPBOX,
+             QUICK_STOP_COLUMNS,
+@@ -640,6 +640,11 @@ panel_options_box (void)
+             N_("Use panel sort mo&de")
+         };
+ 
++        const char *qfilter_options[] = {
++            N_("Case insensitive"),
++            N_("Case sensitive")
++        };
++
+         quick_widget_t quick_widgets[] = {
+             /* *INDENT-OFF* */
+             QUICK_START_COLUMNS,
+@@ -656,6 +661,11 @@ panel_options_box (void)
+                     QUICK_CHECKBOX (N_("Simple s&wap"), &simple_swap, NULL),
+                     QUICK_CHECKBOX (N_("A&uto save panels setup"), &panels_options.auto_save_setup,
+                                     NULL),
++                    QUICK_CHECKBOX (N_("Use Quickfilter"), &panels_options.use_quickfilter,
++                                    NULL),
++                    QUICK_SEPARATOR (FALSE),
++                    QUICK_SEPARATOR (FALSE),
++                    QUICK_SEPARATOR (FALSE),
+                     QUICK_SEPARATOR (FALSE),
+                     QUICK_SEPARATOR (FALSE),
+                     QUICK_SEPARATOR (FALSE),
+@@ -677,6 +687,10 @@ panel_options_box (void)
+                     QUICK_RADIO (QSEARCH_NUM, qsearch_options, (int *) &panels_options.qsearch_mode,
+                                  NULL),
+                 QUICK_STOP_GROUPBOX,
++                QUICK_START_GROUPBOX (N_("Filter case")),
++                    QUICK_RADIO (QFILTER_NUM, qfilter_options, (int *) &panels_options.filter_mode,
++                                 NULL),
++                QUICK_STOP_GROUPBOX,
+             QUICK_STOP_COLUMNS,
+             QUICK_BUTTONS_OK_CANCEL,
+             QUICK_END
+diff --git a/src/filemanager/cmd.c b/src/filemanager/cmd.c
+index 999817e1b..e142be913 100644
+--- a/src/filemanager/cmd.c
++++ b/src/filemanager/cmd.c
+@@ -173,6 +173,7 @@ do_edit (const vfs_path_t * what_vpath)
+ static void
+ set_panel_filter_to (WPanel * p, char *allocated_filter_string)
+ {
++    stop_quickfilter (p, FALSE);
+     g_free (p->filter);
+     p->filter = 0;
+ 
+diff --git a/src/filemanager/dir.c b/src/filemanager/dir.c
+index 2188d1983..efae55d50 100644
+--- a/src/filemanager/dir.c
++++ b/src/filemanager/dir.c
+@@ -150,6 +150,7 @@ handle_dirent (struct dirent *dp, const char *fltr, struct stat *buf1, int *link
+                int *stale_link)
+ {
+     vfs_path_t *vpath;
++    gboolean add_directory, case_insensitive_filter;
+ 
+     if (DIR_IS_DOT (dp->d_name) || DIR_IS_DOTDOT (dp->d_name))
+         return FALSE;
+@@ -187,8 +188,15 @@ handle_dirent (struct dirent *dp, const char *fltr, struct stat *buf1, int *link
+ 
+     vfs_path_free (vpath);
+ 
+-    return (S_ISDIR (buf1->st_mode) || *link_to_dir != 0 || fltr == NULL
+-            || mc_search (fltr, NULL, dp->d_name, MC_SEARCH_T_GLOB));
++    add_directory = false;
++    if (!filter_dirs)
++        add_directory = S_ISDIR (buf1->st_mode) || *link_to_dir != 0;
++    case_insensitive_filter = FALSE;
++    if (panels_options.filter_mode == QFILTER_CASE_INSENSITIVE)
++        case_insensitive_filter = TRUE;
++
++    return (add_directory || fltr == NULL ||
++            mc_search_case (fltr, NULL, dp->d_name, MC_SEARCH_T_GLOB, case_insensitive_filter));
+ }
+ 
+ /* --------------------------------------------------------------------------------------------- */
+@@ -546,11 +554,19 @@ dir_list_clean (dir_list * list)
+ }
+ 
+ /* --------------------------------------------------------------------------------------------- */
+-/** Used to set up a directory list when there is no access to a directory */
+ 
+ gboolean
+ dir_list_init (dir_list * list)
+ {
++    return dir_list_init_filtered (list, NULL);
++}
++
++/* --------------------------------------------------------------------------------------------- */
++/** Used to set up a directory list when there is no access to a directory */
++
++gboolean
++dir_list_init_filtered (dir_list * list, const char *fltr)
++{
+     file_entry_t *fentry;
+ 
+     /* Need to grow the *list? */
+@@ -560,6 +576,11 @@ dir_list_init (dir_list * list)
+         return FALSE;
+     }
+ 
++    if (filter_dotdot_dir && fltr && !mc_search (fltr, NULL, "..", MC_SEARCH_T_GLOB))
++    {
++        list->len = 0;
++        return TRUE;
++    }
+     fentry = &list->list[0];
+     memset (fentry, 0, sizeof (*fentry));
+     fentry->fnamelen = 2;
+@@ -632,11 +653,11 @@ dir_list_load (dir_list * list, const vfs_path_t * vpath, GCompareFunc sort,
+     const char *vpath_str;
+ 
+     /* ".." (if any) must be the first entry in the list */
+-    if (!dir_list_init (list))
++    if (!dir_list_init_filtered (list, fltr))
+         return;
+ 
+     fentry = &list->list[0];
+-    if (dir_get_dotdot_stat (vpath, &st))
++    if (list->len > 0 && dir_get_dotdot_stat (vpath, &st))
+         fentry->st = st;
+ 
+     dirp = mc_opendir (vpath);
+@@ -665,6 +686,13 @@ dir_list_load (dir_list * list, const vfs_path_t * vpath, GCompareFunc sort,
+             rotate_dash (TRUE);
+     }
+ 
++    /* Always add ".." if list would be empty otherwise */
++    if (list->len == 0)
++    {
++        dir_list_init (list);
++        if (dir_get_dotdot_stat (vpath, &st))
++            fentry->st = st;
++    }
+     dir_list_sort (list, sort, sort_op);
+ 
+   ret:
+@@ -749,16 +777,16 @@ dir_list_reload (dir_list * list, const vfs_path_t * vpath, GCompareFunc sort,
+     else
+     {
+         dir_list_clean (list);
+-        if (!dir_list_init (list))
++
++        if (!dir_list_init_filtered (list, fltr))
+         {
+             dir_list_clean (&dir_copy);
+             return;
+         }
+ 
+-        if (dir_get_dotdot_stat (vpath, &st))
++        if (list->len > 0 && dir_get_dotdot_stat (vpath, &st))
+         {
+             file_entry_t *fentry;
+-
+             fentry = &list->list[0];
+             fentry->st = st;
+         }
+@@ -810,6 +838,15 @@ dir_list_reload (dir_list * list, const vfs_path_t * vpath, GCompareFunc sort,
+     tree_store_end_check ();
+     g_hash_table_destroy (marked_files);
+ 
++    /* Always add ".." if list would be empty otherwise */
++    if (list->len == 0)
++    {
++        file_entry_t *fentry;
++        dir_list_init (list);
++        if (dir_get_dotdot_stat (vpath, &st))
++            fentry->st = st;
++    }
++
+     dir_list_sort (list, sort, sort_op);
+ 
+     dir_list_clean (&dir_copy);
+diff --git a/src/filemanager/dir.h b/src/filemanager/dir.h
+index a87e92d41..50f4eaa5e 100644
+--- a/src/filemanager/dir.h
++++ b/src/filemanager/dir.h
+@@ -54,6 +54,7 @@ void dir_list_reload (dir_list * list, const vfs_path_t * vpath, GCompareFunc so
+                       const dir_sort_options_t * sort_op, const char *fltr);
+ void dir_list_sort (dir_list * list, GCompareFunc sort, const dir_sort_options_t * sort_op);
+ gboolean dir_list_init (dir_list * list);
++gboolean dir_list_init_filtered (dir_list * list, const char *fltr);
+ void dir_list_clean (dir_list * list);
+ gboolean handle_path (const char *path, struct stat *buf1, int *link_to_dir, int *stale_link);
+ 
+diff --git a/src/filemanager/midnight.c b/src/filemanager/midnight.c
+index 50bebfdfd..996ea5f2c 100644
+--- a/src/filemanager/midnight.c
++++ b/src/filemanager/midnight.c
+@@ -1486,7 +1486,7 @@ midnight_callback (Widget * w, Widget * sender, widget_msg_t msg, int parm, void
+ 
+         if ((!mc_global.tty.alternate_plus_minus
+              || !(mc_global.tty.console_flag != '\0' || mc_global.tty.xterm_flag)) && !quote
+-            && !current_panel->searching)
++            && !current_panel->searching && !current_panel->quickfiltering)
+         {
+             if (!only_leading_plus_minus)
+             {
+diff --git a/src/filemanager/panel.c b/src/filemanager/panel.c
+index 1a4100172..a7337e754 100644
+--- a/src/filemanager/panel.c
++++ b/src/filemanager/panel.c
+@@ -999,6 +999,19 @@ display_mini_info (WPanel * panel)
+         return;
+     }
+ 
++    if (panel->quickfiltering)
++    {
++        tty_setcolor (INPUT_COLOR);
++        if (w->cols - 1 < 10)
++        {
++            tty_print_string (str_fit_to_term ("Filter: ", w->cols - 2, J_LEFT));
++            return;
++        }
++        tty_print_string ("Filter: ");
++        tty_print_string (str_fit_to_term (panel->quickfilter_buffer, w->cols - 10, J_LEFT));
++        return;
++    }
++
+     /* Status resolves links and show them */
+     set_colors (panel);
+ 
+@@ -1383,7 +1396,7 @@ adjust_top_file (WPanel * panel)
+ 
+ /* --------------------------------------------------------------------------------------------- */
+ /** add "#enc:encodning" to end of path */
+-/* if path end width a previous #enc:, only encoding is changed no additional 
++/* if path end width a previous #enc:, only encoding is changed no additional
+  * #enc: is appended
+  * retun new string
+  */
+@@ -2205,7 +2218,6 @@ move_left (WPanel * panel)
+         move_selection (panel, -panel_lines (panel));
+         return MSG_HANDLED;
+     }
+-
+     return maybe_cd (TRUE);     /* cd .. */
+ }
+ 
+@@ -2219,8 +2231,7 @@ move_right (WPanel * panel)
+         move_selection (panel, panel_lines (panel));
+         return MSG_HANDLED;
+     }
+-
+-    return maybe_cd (FALSE);    /* cd (selection) */
++    return maybe_cd (FALSE);    /* cd .. */
+ }
+ 
+ /* --------------------------------------------------------------------------------------------- */
+@@ -2775,6 +2786,123 @@ stop_search (WPanel * panel)
+ }
+ 
+ /* --------------------------------------------------------------------------------------------- */
++/* Try to apply the quickfilter_buffer to the current directory.
++ * Checks that applying the filter will not result in an empty directory.
++ *
++ * @return TRUE if it could be applied, FALSE otherwise.
++ */
++
++static gboolean
++apply_quickpanel_filter (WPanel * p)
++{
++    size_t l, fl, cp_index;
++    int i;
++    char *new_filter;
++    mc_search_t *search;
++    gboolean is_found;
++
++    l = strlen (p->quickfilter_buffer);
++    if (l == 0)
++        return FALSE;
++
++    fl = l + 2 + 1;
++    new_filter = g_malloc (fl);
++
++    if (new_filter == NULL)
++        return FALSE;
++
++    /* Copy string. Prefix/Suffix it with '*' to have the word as infix */
++    cp_index = 0;
++    if (p->quickfilter_buffer[cp_index] != '*')
++        new_filter[cp_index++] = '*';
++
++    memcpy (new_filter + cp_index, p->quickfilter_buffer, l);
++    cp_index += l;
++
++    if (p->quickfilter_buffer[l - 1] != '*')
++        new_filter[cp_index++] = '*';
++
++    new_filter[cp_index] = '\0';
++
++    search = mc_search_new (new_filter, NULL);
++    search->search_type = MC_SEARCH_T_GLOB;
++    search->is_entire_line = TRUE;
++
++    switch (panels_options.filter_mode)
++    {
++    case QFILTER_CASE_SENSITIVE:
++        search->is_case_sensitive = TRUE;
++        break;
++    case QFILTER_CASE_INSENSITIVE:
++        search->is_case_sensitive = FALSE;
++        break;
++    default:
++        search->is_case_sensitive = TRUE;
++        break;
++    }
++
++    is_found = FALSE;
++    for (i = 0; i < p->dir.len; ++i)
++    {
++        if (mc_search_run (search, p->dir.list[i].fname, 0, p->dir.list[i].fnamelen, NULL))
++        {
++            is_found = TRUE;
++            break;
++        }
++    }
++
++    mc_search_free (search);
++    if (!is_found)
++    {
++        g_free (new_filter);
++        return FALSE;
++    }
++
++    g_free (p->filter);
++    p->filter = new_filter;
++
++    update_panels (UP_OPTIMIZE, UP_KEEPSEL);
++    return TRUE;
++}
++
++/* --------------------------------------------------------------------------------------------- */
++
++static void
++do_quickfilter (WPanel * panel, int key)
++{
++    size_t l;
++    l = strlen (panel->quickfilter_buffer);
++    if (key == KEY_BACKSPACE)
++    {
++        if (l <= 1)
++        {
++            stop_quickfilter (panel, TRUE);
++            return;
++        }
++        panel->quickfilter_buffer[l - 1] = '\0';
++    }
++    else
++    {
++        panel->quickfilter_buffer[l] = (char) key;
++        panel->quickfilter_buffer[l + 1] = '\0';
++    }
++    if (!apply_quickpanel_filter (panel) && key != KEY_BACKSPACE)
++    {
++        panel->quickfilter_buffer[l] = '\0';
++    }
++}
++
++/* --------------------------------------------------------------------------------------------- */
++
++static void
++start_quickfilter (WPanel * panel)
++{
++    if (panel->quickfiltering || panel->filter == NULL)
++        panel->quickfiltering = TRUE;
++    return;
++}
++
++/* --------------------------------------------------------------------------------------------- */
+ /** Return TRUE if the Enter key has been processed, FALSE otherwise */
+ 
+ static gboolean
+@@ -3293,6 +3421,8 @@ _do_panel_cd (WPanel * panel, const vfs_path_t * new_dir_vpath, enum cd_enum cd_
+     /* Reload current panel */
+     panel_clean_dir (panel);
+ 
++    stop_quickfilter (panel, FALSE);
++
+     dir_list_load (&panel->dir, panel->cwd_vpath, panel->sort_field->sort_routine,
+                    &panel->sort_info, panel->filter);
+     try_to_select (panel, get_parent_dir_name (panel->cwd_vpath, olddir_vpath));
+@@ -3601,6 +3731,7 @@ panel_key (WPanel * panel, int key)
+     if (is_abort_char (key))
+     {
+         stop_search (panel);
++        stop_quickfilter (panel, TRUE);
+         return MSG_HANDLED;
+     }
+ 
+@@ -3610,6 +3741,12 @@ panel_key (WPanel * panel, int key)
+         return MSG_HANDLED;
+     }
+ 
++    if (panel->quickfiltering && ((key >= ' ' && key <= 255) || key == KEY_BACKSPACE))
++    {
++        do_quickfilter (panel, key);
++        return MSG_HANDLED;
++    }
++
+     for (i = 0; panel_map[i].key != 0; i++)
+         if (key == panel_map[i].key)
+             return panel_execute_cmd (panel, panel_map[i].command);
+@@ -3622,9 +3759,18 @@ panel_key (WPanel * panel, int key)
+ 
+     if (!command_prompt && ((key >= ' ' && key <= 255) || key == KEY_BACKSPACE))
+     {
+-        start_search (panel);
+-        do_search (panel, key);
+-        return MSG_HANDLED;
++        if (!panels_options.use_quickfilter)
++        {
++            start_search (panel);
++            do_search (panel, key);
++            return MSG_HANDLED;
++        }
++        else if (panel->filter == NULL)
++        {
++            start_quickfilter (panel);
++            do_quickfilter (panel, key);
++            return MSG_HANDLED;
++        }
+     }
+ 
+     return MSG_NOT_HANDLED;
+@@ -4304,6 +4450,7 @@ panel_new_with_dir (const char *panel_name, const vfs_path_t * vpath)
+     panel->total = 0;
+     panel->dirty = 1;
+     panel->searching = FALSE;
++    panel->quickfiltering = FALSE;
+     panel->dirs_marked = 0;
+     panel->is_panelized = FALSE;
+     panel->format = NULL;
+@@ -4322,6 +4469,8 @@ panel_new_with_dir (const char *panel_name, const vfs_path_t * vpath)
+     for (i = 0; i < LIST_TYPES; i++)
+         panel->user_status_format[i] = g_strdup (DEFAULT_USER_FORMAT);
+ 
++    panel->quickfilter_buffer[0] = '\0';
++
+     panel->search_buffer[0] = '\0';
+     panel->prev_search_buffer[0] = '\0';
+     panel->frame_size = frame_half;
+@@ -5015,3 +5164,20 @@ do_cd (const vfs_path_t * new_dir_vpath, enum cd_enum exact)
+ }
+ 
+ /* --------------------------------------------------------------------------------------------- */
++
++void
++stop_quickfilter (WPanel * panel, gboolean redraw)
++{
++    if (!panel->quickfiltering)
++    {
++        return;
++    }
++    panel->quickfiltering = FALSE;
++    panel->quickfilter_buffer[0] = '\0';
++    g_free (panel->filter);
++    panel->filter = 0;
++    if (redraw)
++        update_panels (UP_OPTIMIZE, UP_KEEPSEL);
++}
++
++/* --------------------------------------------------------------------------------------------- */
+diff --git a/src/filemanager/panel.h b/src/filemanager/panel.h
+index 07c19fa31..bf8adff04 100644
+--- a/src/filemanager/panel.h
++++ b/src/filemanager/panel.h
+@@ -133,6 +133,9 @@ typedef struct
+     int codepage;               /* panel codepage */
+ #endif
+ 
++    gboolean quickfiltering;
++    char quickfilter_buffer[MC_MAXFILENAMELEN];
++
+     gboolean searching;
+     char search_buffer[MC_MAXFILENAMELEN];
+     char prev_search_buffer[MC_MAXFILENAMELEN];
+@@ -192,6 +195,8 @@ void panel_init (void);
+ void panel_deinit (void);
+ gboolean do_cd (const vfs_path_t * new_dir_vpath, enum cd_enum cd_type);
+ 
++void stop_quickfilter (WPanel * panel, gboolean redraw);
++
+ /* --------------------------------------------------------------------------------------------- */
+ /*** inline functions ****************************************************************************/
+ /* --------------------------------------------------------------------------------------------- */
+diff --git a/src/setup.c b/src/setup.c
+index c033590ac..ce87613aa 100644
+--- a/src/setup.c
++++ b/src/setup.c
+@@ -145,7 +145,9 @@ panels_options_t panels_options = {
+     .permission_mode = FALSE,
+     .qsearch_mode = QSEARCH_PANEL_CASE,
+     .torben_fj_mode = FALSE,
+-    .select_flags = SELECT_MATCH_CASE | SELECT_SHELL_PATTERNS
++    .select_flags = SELECT_MATCH_CASE | SELECT_SHELL_PATTERNS,
++    .use_quickfilter = FALSE,
++    .filter_mode = QFILTER_CASE_SENSITIVE
+ };
+ 
+ gboolean easy_patterns = TRUE;
+@@ -169,6 +171,9 @@ gboolean use_file_to_check_type = TRUE;
+ 
+ gboolean verbose = TRUE;
+ 
++gboolean filter_dirs = 0;
++gboolean filter_dotdot_dir = 0;
++
+ /*
+  * Whether the Midnight Commander tries to provide more
+  * information about copy/move sizes and bytes transferred
+@@ -352,6 +357,8 @@ static const struct
+     { "mcview_remember_file_position", &mcview_remember_file_position },
+     { "auto_fill_mkdir_name", &auto_fill_mkdir_name },
+     { "copymove_persistent_attr", &copymove_persistent_attr },
++    { "filter_dirs", &filter_dirs },
++    { "filter_dotdot_dir", &filter_dotdot_dir },
+     { NULL, NULL }
+ };
+ 
+@@ -422,6 +429,7 @@ static const struct
+     { "filetype_mode", &panels_options.filetype_mode },
+     { "permission_mode", &panels_options.permission_mode },
+     { "torben_fj_mode", &panels_options.torben_fj_mode },
++    { "use_quickfilter", &panels_options.use_quickfilter },
+     { NULL, NULL }
+ };
+ /* *INDENT-ON* */
+@@ -923,6 +931,13 @@ panels_load_options (void)
+         panels_options.select_flags =
+             mc_config_get_int (mc_global.main_config, CONFIG_PANELS_SECTION, "select_flags",
+                                (int) panels_options.select_flags);
++        qmode = mc_config_get_int (mc_global.main_config, CONFIG_PANELS_SECTION,
++                                   "filter_mode", (int) panels_options.qsearch_mode);
++
++        if (qmode == QFILTER_CASE_INSENSITIVE)
++            panels_options.filter_mode = QFILTER_CASE_INSENSITIVE;
++        else
++            panels_options.filter_mode = QFILTER_CASE_SENSITIVE;
+     }
+ }
+ 
+@@ -944,6 +959,8 @@ panels_save_options (void)
+                        "quick_search_mode", (int) panels_options.qsearch_mode);
+     mc_config_set_int (mc_global.main_config, CONFIG_PANELS_SECTION,
+                        "select_flags", (int) panels_options.select_flags);
++    mc_config_set_int (mc_global.main_config, CONFIG_PANELS_SECTION,
++                       "filter_mode", (int) panels_options.filter_mode);
+ }
+ 
+ /* --------------------------------------------------------------------------------------------- */
+diff --git a/src/setup.h b/src/setup.h
+index b483d7da9..ecdf1d5c5 100644
+--- a/src/setup.h
++++ b/src/setup.h
+@@ -29,6 +29,13 @@ typedef enum
+     QSEARCH_NUM
+ } qsearch_mode_t;
+ 
++typedef enum
++{
++    QFILTER_CASE_INSENSITIVE = 0,       /* quick filter in case insensitive mode */
++    QFILTER_CASE_SENSITIVE = 1, /* quick filter in case sensitive mode */
++    QFILTER_NUM
++} filter_mode_t;
++
+ /*** structures declarations (and typedefs of structures)*****************************************/
+ 
+ /* panels ini options; [Panels] section */
+@@ -55,6 +62,8 @@ typedef struct
+     qsearch_mode_t qsearch_mode;        /* Quick search mode */
+     gboolean torben_fj_mode;    /* If TRUE, use some usability hacks by Torben */
+     panel_select_flags_t select_flags;  /* Select/unselect file flags */
++    gboolean use_quickfilter;
++    filter_mode_t filter_mode;  /* Quick search mode */
+ } panels_options_t;
+ 
+ typedef struct macro_action_t
+@@ -89,6 +98,8 @@ extern gboolean verbose;
+ extern gboolean copymove_persistent_attr;
+ extern gboolean classic_progressbar;
+ extern gboolean easy_patterns;
++extern gboolean filter_dirs;
++extern gboolean filter_dotdot_dir;
+ extern int option_tab_spacing;
+ extern gboolean auto_save_setup;
+ extern gboolean only_leading_plus_minus;
