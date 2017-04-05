@@ -1,12 +1,7 @@
 EAPI=6
 
-inherit versionator
-MY_PN="${PN}"
-MY_PV="${PV}"
-MY_P="${PN}-${MY_PV}"
-
+inherit versionator cmake-utils git-r3
 TMP_PV="$(replace_all_version_separators '_' )"
-inherit cmake-utils git-r3
 
 DESCRIPTION="azure-c-shared-utility is a C library providing common functionality for basic tasks (like string, list manipulation, IO, etc.)."
 HOMEPAGE="https://github.com/Azure/${PN}"
@@ -16,19 +11,20 @@ EGIT_BRANCH="release_${TMP_PV}"
 
 LICENSE="MIT License"
 SLOT="0"
-KEYWORDS="~amd64 ~x86"
+KEYWORDS="amd64 x86"
 IUSE=""
 
-DEPEND=""
+DEPEND="net-misc/curl
+	dev-libs/openssl
+	sys-apps/util-linux
+"
 RDEPEND="${DEPEND}"
-
-S="${WORKDIR}/${MY_P}"
 
 src_configure() {
   local mycmakeargs=(
     -DBUILD_TESTING=OFF
     -Duse_installed_dependencies=ON
+    -Dbuild_as_dynamic=ON
   )
   cmake-utils_src_configure
 }
-
