@@ -3,7 +3,7 @@ EAPI=6
 inherit versionator cmake-utils git-r3
 TMP_PV="$(replace_all_version_separators '_' )"
 
-DESCRIPTION="azure-c-shared-utility is a C library providing common functionality for basic tasks (like string, list manipulation, IO, etc.)."
+DESCRIPTION="azure-umqtt-c is a general purpose library build for MQTT protocol"
 HOMEPAGE="https://github.com/Azure/${PN}"
 
 EGIT_REPO_URI="https://github.com/Azure/${PN}.git"
@@ -17,6 +17,7 @@ IUSE=""
 DEPEND="net-misc/curl
 	dev-libs/openssl
 	sys-apps/util-linux
+	=net-libs/azure-c-shared-utility-${PV}
 "
 RDEPEND="${DEPEND}"
 
