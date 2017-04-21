@@ -144,7 +144,7 @@ index 2188d1983..efae55d50 100644
  
 -    return (S_ISDIR (buf1->st_mode) || *link_to_dir != 0 || fltr == NULL
 -            || mc_search (fltr, NULL, dp->d_name, MC_SEARCH_T_GLOB));
-+    add_directory = false;
++    add_directory = FALSE;
 +    if (!filter_dirs)
 +        add_directory = S_ISDIR (buf1->st_mode) || *link_to_dir != 0;
 +    case_insensitive_filter = FALSE;
