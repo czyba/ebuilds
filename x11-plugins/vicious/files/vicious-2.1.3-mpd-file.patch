@@ -1,0 +1,14 @@
+diff -ru vicious-2.1.3/widgets/mpd.lua tmp/widgets/mpd.lua
+--- vicious-2.1.3/widgets/mpd.lua	2014-01-04 17:15:05.000000000 +0100
++++ tmp/widgets/mpd.lua	2017-05-29 19:31:58.490064844 +0200
+@@ -50,8 +50,8 @@
+             elseif k == "Title"  then mpd_state["{"..k.."}"] = helpers.escape(v)
+             elseif k == "Album"  then mpd_state["{"..k.."}"] = helpers.escape(v)
+             elseif k == "Genre"  then mpd_state["{"..k.."}"] = helpers.escape(v)
+-            --elseif k == "Name" then mpd_state["{"..k.."}"] = helpers.escape(v)
+-            --elseif k == "file" then mpd_state["{"..k.."}"] = helpers.escape(v)
++            elseif k == "Name" then mpd_state["{"..k.."}"] = helpers.escape(v)
++            elseif k == "file" then mpd_state["{"..k.."}"] = helpers.escape(v)
+             end
+         end
+     end
