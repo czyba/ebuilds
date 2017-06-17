@@ -1,0 +1,15 @@
+diff -u task-2.5.1/CMakeLists.txt task-2.5.1_new/CMakeLists.txt
+--- task-2.5.1/CMakeLists.txt	2016-02-24 23:18:11.000000000 +0100
++++ task-2.5.1_new/CMakeLists.txt	2017-06-17 14:07:14.893141347 +0200
+@@ -119,7 +119,7 @@
+    if (GNUTLS_FOUND)
+      set (HAVE_LIBGNUTLS true)
+      set (TASK_INCLUDE_DIRS ${TASK_INCLUDE_DIRS} ${GNUTLS_INCLUDE_DIR})
+-     set (TASK_LIBRARIES    ${TASK_LIBRARIES}    ${GNUTLS_LIBRARIES})
++     set (TASK_LIBRARIES    ${TASK_LIBRARIES}    ${GNUTLS_LIBRARIES} -pthread)
+    endif (GNUTLS_FOUND)
+ endif (USE_GNUTLS)
+ 
+Common subdirectories: task-2.5.1/doc and task-2.5.1_new/doc
+Common subdirectories: task-2.5.1/scripts and task-2.5.1_new/scripts
+Common subdirectories: task-2.5.1/src and task-2.5.1_new/src
